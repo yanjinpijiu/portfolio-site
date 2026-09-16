@@ -1,0 +1,10 @@
+# 复制本文件为 application-local.yml（就放在同一层目录，不用放进 src/main/resources），
+# 填入你自己的本地开发密钥。application-local.yml 已被 .gitignore 忽略，不会提交到仓库。
+#
+# 部署到服务器时不要用这个文件，改用环境变量：
+#   APP_ADMIN_KEY=<你自己生成的强密钥>
+#
+# 生成一个随机密钥（Linux / macOS）：
+#   openssl rand -base64 24
+app:
+  admin-key: ${APP_ADMIN_KEY:换成你自己的本地密钥}

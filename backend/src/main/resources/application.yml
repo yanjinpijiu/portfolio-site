@@ -1,0 +1,86 @@
+server:
+  # 本地开发用 8080；服务器上 8080-8082 被 RocketMQ 的 broker 容器占了，
+  # 部署时由 /opt/portfolio/portfolio.env 里的 SERVER_PORT 覆盖成 8090
+  port: ${SERVER_PORT:8080}
+  servlet:
+    encoding:
+      charset: UTF-8
+      force: true
+  # 线上拓扑是「浏览器 --https--> nginx --http--> 本机后端」。不告诉后端这一层，
+  # 它会拿浏览器发来的 Origin（https://域名）跟自己的 http://域名 比，判定为跨域，
+  # 然后按 CORS 白名单把请求拒掉，报 403 Invalid CORS request。
+  # 表现极具迷惑性：同一个站点的 GET 全部正常（GET 不带 Origin），
+  # 而所有 POST 都失败——后台登录、埋点上报都是 POST，等于整站功能废一半。
+  #
+  # framework = 用 Spring 自己的 ForwardedHeaderFilter 从 X-Forwarded-* 还原真实的
+  # 协议和域名，于是请求与 Origin 同源，根本不走 CORS 逻辑。
+  # 安全性前提：后端只监听回环地址（systemd 里 SERVER_ADDRESS=127.0.0.1），
+  # 只有本机 nginx 能连上它，所以这些头不可能被外部伪造。
+  forward-headers-strategy: framework
+
+spring:
+  application:
+    name: portfolio
+  config:
+    # 密钥等本地配置放在 jar 外面：backend/application-local.yml（已 gitignore）。
+    # 这样构建产物里不含任何密钥；服务器上不放这个文件，密钥只认环境变量 APP_ADMIN_KEY。
+    import: optional:file:./application-local.yml,optional:file:./config/application-local.yml
+  datasource:
+    driver-class-name: org.h2.Driver
+    url: jdbc:h2:file:./data/portfolio;MODE=MySQL;DATABASE_TO_LOWER=TRUE;AUTO_SERVER=TRUE
+    username: sa
+    password: ""
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/schema.sql
+      encoding: UTF-8
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 20MB
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto
+
+app:
+  # nginx 的站点目录。静态/动态模式切换要往里写 snapshot.json 和 index-static.html。
+  # 部署时由 portfolio.env 里的 APP_WEB_ROOT 指到 /var/www/qianlink；本地留空，
+  # 切不动文件时后台会明确提示「只在服务器上生效」，而不是装作切成功
+  web-root: ${APP_WEB_ROOT:}
+  # 后台登录密钥不在本文件里，见 application-local.yml（本地）或环境变量 APP_ADMIN_KEY（部署）。
+  # 两者都没有时服务会启动失败，避免线上跑在未知密钥上。
+  token-ttl-hours: 12
+  # 允许跨域的前端来源（本地开发用；生产由 nginx 同源代理，可留空）
+  cors-origins:
+    - http://localhost:5173
+    - http://127.0.0.1:5173
+  storage:
+    # local = 本地磁盘（开发）；oss = 阿里云 OSS（生产）
+    type: ${APP_STORAGE_TYPE:local}
+    local:
+      # 文件落盘目录，相对后端进程工作目录
+      dir: ./data/files
+    oss:
+      endpoint: ${OSS_ENDPOINT:}
+      bucket: ${OSS_BUCKET:}
+      access-key-id: ${OSS_ACCESS_KEY_ID:}
+      access-key-secret: ${OSS_ACCESS_KEY_SECRET:}
+      # 自定义域名或 CDN，留空则用 OSS 默认域名
+      public-prefix: ${OSS_PUBLIC_PREFIX:}
+  backup:
+    # 每天凌晨 3 点把数据库和图片打个 zip，保留 7 份，放在后端工作目录的 backups/
+    # （备份写在应用里而不是服务器 cron：H2 是单文件库，进程开着时直接 cp 可能拿到半个文件）
+    enabled: ${APP_BACKUP_ENABLED:true}
+    dir: ./backups
+    keep: 7
+
+logging:
+  level:
+    root: info
+    top.qianlink.portfolio: info

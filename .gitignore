@@ -1,0 +1,51 @@
+# 构建产物
+frontend/node_modules/
+frontend/dist/
+backend/target/
+
+# 运行时数据（H2 数据库文件 + 上传的简历 + 每日备份产物）
+backend/data/
+backend/backups/
+
+# 本地私密配置（后台密钥等），只保留 .example 模板
+# 放在 jar 外面，构建产物里不含密钥
+backend/application-local.yml
+backend/config/application-local.yml
+
+# 部署时在服务器上生成的环境变量文件和备份
+deploy/portfolio.env
+deploy/*.env
+!deploy/portfolio.env.example
+*.tar.gz
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# 系统
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 日志
+*.log
+npm-debug.log*
+
+# ---------------------------------------------------------------------------
+# 站点内容：只留本地，绝不进仓库
+#
+# 这两个 Seeder 里是站点真实内容（姓名/手机号/邮箱/学校/项目描述），
+# seed-images 里是证件照、证书扫描件（含准考证号）和各项目截图。
+# 仓库对外只放「引擎」，不放「内容」——详见 LOCAL-ONLY.md。
+#
+# 注意：这两个 .java 是本地用 ApplicationRunner，没有任何其它代码引用它们，
+# 不进仓库不影响编译；公开仓库因此不带种子内容（首次启动站点为空，后台自己录）。
+# ---------------------------------------------------------------------------
+backend/src/main/resources/seed-images/
+backend/src/main/java/top/qianlink/portfolio/config/ContentSeeder.java
+backend/src/main/java/top/qianlink/portfolio/config/DataSeeder.java
+
+# 内部交接文档与本地规约，仅本地
+HANDOFF.md
+LOCAL-ONLY.md

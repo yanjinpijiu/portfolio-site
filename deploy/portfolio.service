@@ -1,0 +1,48 @@
+# /etc/systemd/system/portfolio.service
+#
+# 这份文件里没有任何密钥：密钥放在 /opt/portfolio/portfolio.env（权限 600），
+# 由 EnvironmentFile 注入。所以本文件可以安全地提交到公开仓库。
+#
+# 常用命令：
+#   systemctl status portfolio
+#   systemctl restart portfolio
+#   journalctl -u portfolio -f
+
+[Unit]
+Description=个人主页后端 (qianlink.top)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Ubuntu/Debian 上是 www-data；CentOS/Alibaba Cloud Linux 上换成 nginx
+User=www-data
+Group=www-data
+
+WorkingDirectory=/opt/portfolio
+
+# 密钥、端口、存储配置都在这里，见 /opt/portfolio/portfolio.env
+EnvironmentFile=/opt/portfolio/portfolio.env
+
+# 只监听回环地址，公网流量一律走 nginx 反代，8080 不对外暴露
+Environment=SERVER_ADDRESS=127.0.0.1
+
+# 堆开得偏小是有原因的：这台机器总共 1.8G 内存，里面已经跑着 MySQL、
+# Redis、RocketMQ 三个容器，留给这个 JVM 的余量不多。另有 2G swap 兜底
+# （setup-server.sh 加的）。个人站流量很小，384m 够用。
+ExecStart=/usr/bin/java -Xms96m -Xmx384m -XX:MaxMetaspaceSize=160m -Dfile.encoding=UTF-8 -jar /opt/portfolio/portfolio-1.0.0.jar
+
+# Ctrl+Stop 收到 SIGTERM 退出，算正常结束，别让 systemd 当成崩溃
+SuccessExitStatus=143
+Restart=always
+RestartSec=5
+
+# 基础加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
