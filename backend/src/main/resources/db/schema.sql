@@ -229,3 +229,5 @@ CREATE TABLE IF NOT EXISTS api_access_log (
 );
 CREATE INDEX IF NOT EXISTS idx_api_created ON api_access_log (created_at);
 CREATE INDEX IF NOT EXISTS idx_api_path ON api_access_log (path, created_at);
+-- 日志页和另外两张表一样按 visit_date 过滤，这张表原先只有 created_at 的索引
+CREATE INDEX IF NOT EXISTS idx_api_date ON api_access_log (visit_date);

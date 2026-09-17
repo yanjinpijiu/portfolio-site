@@ -206,6 +206,31 @@ export const api = {
   adminStatsResumes: (days, resumeId) =>
     request(`/api/admin/stats/resumes?${toQuery({ days, resumeId })}`),
 
+  /* 后台：日志检索。params 是一整包筛选条件，摊成位置参数会有十几个 */
+  adminStatsLogs: (params) => request(`/api/admin/stats/logs?${toQuery(params)}`),
+  adminStatsLogOptions: (params) => request(`/api/admin/stats/logs/options?${toQuery(params)}`),
+
+  /** 导出日志 CSV。和导出备份一样是文件流，得绕开 request() 自己取 blob */
+  async adminExportLogs(params) {
+    const res = await fetch(`${BASE}/api/admin/stats/logs/export?${toQuery(params)}`, {
+      headers: { 'X-Admin-Token': tokenStore.get() }
+    })
+    const contentType = res.headers.get('Content-Type') || ''
+    if (contentType.includes('application/json')) {
+      // 出错时后端返回的是 ApiResponse，不是文件
+      const data = await res.json().catch(() => null)
+      if (res.status === 401 || (data && data.code === 401)) {
+        tokenStore.clear()
+        if (onUnauthorized) onUnauthorized()
+      }
+      throw new ApiError(data?.code ?? res.status, data?.message || '导出失败')
+    }
+    if (!res.ok) {
+      throw new ApiError(res.status, `导出失败（${res.status}）`)
+    }
+    return { blob: await res.blob(), fileName: fileNameFrom(res.headers.get('Content-Disposition')) }
+  },
+
   /**
    * 导出内容 JSON。响应是文件流，所以和简历预览一样绕开 request() 自己取 blob——
    * 令牌走请求头，普通链接带不上，只能用 fetch。

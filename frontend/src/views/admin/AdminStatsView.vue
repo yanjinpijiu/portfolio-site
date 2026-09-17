@@ -2,6 +2,8 @@
 import { computed, onMounted, ref } from 'vue'
 import { api, formatDate } from '../../api'
 import ChartBox from '../../components/admin/ChartBox.vue'
+// 只有名字，5 KB。4 MB 的底图交给 ChartBox 按需加载，这里不需要它
+import cityNames from '../../assets/china-cities-names.json'
 
 /**
  * 数据看板。
@@ -117,13 +119,26 @@ const weekdayOption = computed(() => {
   }
 })
 
+/** 地区卡片的档位：省级底图（一直有）还是市级底图（R3 加的） */
+const regionLevel = ref('province')
+
+/**
+ * 地图 tooltip。
+ *
+ * 没有数据的区域，ECharts 给的 value 是 NaN 而不是 0（`NaN ?? 0` 还是 NaN），
+ * 直接用就会显示成「台州市：NaN 次」。鼠标扫过空白处必然触发，所以必须挡一下。
+ */
+function mapTip(p) {
+  return `${p.name}：${Number.isFinite(p.value) ? p.value : 0} 次`
+}
+
 /** 地区：省份地图 + TOP10 条形 */
 const provinceOption = computed(() => {
   const rows = visits.value?.province || []
   return {
     tooltip: {
       trigger: 'item',
-      formatter: (p) => `${p.name}：${p.value ?? 0} 次`
+      formatter: mapTip
     },
     visualMap: {
       min: 0,
@@ -172,16 +187,85 @@ function mapName(name) {
   return `${name}省`
 }
 
-const provinceRankOption = computed(() => {
-  const rows = [...(visits.value?.province || [])].slice(0, 10).reverse()
+const CITY_NAME_SET = new Set(cityNames)
+
+/**
+ * 城市名对齐到底图。
+ *
+ * ip2region 的城市字段多数是「杭州市」这样的全称，但自治州 / 地区 / 盟只有简称
+ * （延边、阿里、锡林郭勒），和底图上的「延边朝鲜族自治州」对不上，对不上就不显示。
+ * 先试补后缀，再拿简称去前缀匹配那三类全称，都不行就原样返回
+ * ——界面上就是那个市亮不起来，但下面的排行榜里还在，不会静默丢数据。
+ */
+function cityName(name) {
+  if (!name) return ''
+  if (CITY_NAME_SET.has(name)) return name
+  for (const suffix of ['市', '自治州', '地区', '盟']) {
+    if (CITY_NAME_SET.has(name + suffix)) return name + suffix
+  }
+  for (const full of cityNames) {
+    if ((full.endsWith('自治州') || full.endsWith('地区') || full.endsWith('盟')) && full.startsWith(name)) {
+      return full
+    }
+  }
+  return name
+}
+
+/** 市级数据。「内网IP」是 IP 库给私有地址的占位值，不是地名，榜和地图都不要它 */
+const cityRows = computed(() =>
+  (visits.value?.city || []).filter((r) => r.city && r.city !== '内网IP'))
+
+/** 市级地图：底图是全国 372 个地级市，按市着色 */
+const cityOption = computed(() => {
+  // 色阶上限只按「真的能落到地图上」的城市算。
+  // 不筛的话，一个解析不出省份的城市（或者量特别大的境外 IP）会把上限拉高，
+  // 结果所有画得出来的城市都挤在最浅的那一档，整张图看着像没数据
+  const rows = cityRows.value.filter((r) => CITY_NAME_SET.has(cityName(r.city)))
+  return {
+    tooltip: {
+      trigger: 'item',
+      formatter: mapTip
+    },
+    visualMap: {
+      min: 0,
+      max: Math.max(1, ...rows.map((r) => r.pv)),
+      left: 0,
+      bottom: 0,
+      text: ['多', '少'],
+      inRange: { color: ['#EAF2FA', '#74A5D4', '#27506F'] },
+      textStyle: { fontSize: 11 }
+    },
+    series: [{
+      type: 'map',
+      map: 'china-cities',
+      roam: false,
+      label: { show: false },
+      // 底图有 372 个市，线画细一点，不然整个东部糊成一片
+      itemStyle: { borderColor: '#C9DCEB', borderWidth: 0.4 },
+      emphasis: { label: { show: true, fontSize: 10 } },
+      data: rows.map((r) => ({ name: cityName(r.city), value: r.pv }))
+    }]
+  }
+})
+
+/** TOP10 条形图，跟着上面的档位走：按省就是省份榜，按市就是城市榜 */
+const regionRankOption = computed(() => {
+  const rows = regionLevel.value === 'city'
+    ? [...cityRows.value]
+        .sort((a, b) => b.pv - a.pv)
+        .slice(0, 10)
+        .map((r) => ({ name: `${r.province || ''} ${r.city}`.trim(), pv: r.pv }))
+    : [...(visits.value?.province || [])].slice(0, 10)
+
+  const ordered = rows.reverse()
   return {
     tooltip: { trigger: 'axis' },
-    grid: { left: 60, right: 30, top: 16, bottom: 24 },
+    grid: { left: 76, right: 30, top: 16, bottom: 24 },
     xAxis: { type: 'value', ...AXIS_STYLE },
-    yAxis: { type: 'category', data: rows.map((r) => r.name), ...AXIS_STYLE },
+    yAxis: { type: 'category', data: ordered.map((r) => r.name), ...AXIS_STYLE },
     series: [{
       type: 'bar',
-      data: rows.map((r) => r.pv),
+      data: ordered.map((r) => r.pv),
       itemStyle: { color: '#74A5D4' },
       label: { show: true, position: 'right', fontSize: 11, color: '#64748B' }
     }]
@@ -366,8 +450,31 @@ const snapshotAtText = computed(() =>
   siteMode.value?.snapshotAt ? siteMode.value.snapshotAt.replace('T', ' ').slice(0, 19) : '—')
 
 const recentVisits = computed(() => visits.value?.recent || [])
+/** 有访问记录、但 IP 只解析到国家（没有省）的条数，地图上看不到的那部分 */
+const unlocatedCount = computed(() => visits.value?.unlocated || 0)
 const topIps = computed(() => (visits.value?.topIps || []).slice(0, 12))
 const downloadRows = computed(() => resumeStats.value?.recent || [])
+
+/** 下载来源地区的档位。后端一次把省市两级都查回来了，切档只是换个显示方式 */
+const downloadRegionLevel = ref('province')
+
+const downloadRegions = computed(() => {
+  const rows = resumeStats.value?.region || []
+  if (downloadRegionLevel.value === 'city') {
+    return rows
+  }
+  // 按省汇总。人数是把各市的去重人数相加，同一个人在两个市下过会被算两次——
+  // 一个人跨市下载本来就少见，为它多跑一次 SQL 不划算，这里认下这个偏差
+  const byProvince = new Map()
+  for (const r of rows) {
+    const key = r.province || '未知'
+    const cur = byProvince.get(key) || { province: r.province, city: null, count: 0, uv: 0 }
+    cur.count += r.count || 0
+    cur.uv += r.uv || 0
+    byProvince.set(key, cur)
+  }
+  return [...byProvince.values()].sort((a, b) => b.count - a.count)
+})
 </script>
 
 <template>
@@ -462,6 +569,14 @@ const downloadRows = computed(() => resumeStats.value?.recent || [])
       <button type="button" :class="{ 'is-active': tab === 'visits' }" @click="switchTab('visits')">访客</button>
       <button type="button" :class="{ 'is-active': tab === 'api' }" @click="switchTab('api')">接口</button>
       <button type="button" :class="{ 'is-active': tab === 'resumes' }" @click="switchTab('resumes')">简历下载</button>
+      <!-- 下面的明细只能看最新 50 条，要按日期翻就去日志页 -->
+      <RouterLink
+        class="tabs-none"
+        :to="{ name: 'admin-logs', query: { type: tab === 'api' ? 'api' : tab === 'resumes' ? 'download' : 'visit' } }"
+        style="margin-left: auto; padding: 5px 12px; font-size: 13px; border: 1px solid var(--line); border-radius: 999px; background: #fff"
+      >
+        按日期查日志 →
+      </RouterLink>
     </div>
 
     <div v-if="loading" class="skeleton" style="height: 260px"></div>
@@ -486,12 +601,44 @@ const downloadRows = computed(() => resumeStats.value?.recent || [])
 
       <div class="chart-row">
         <div class="card">
-          <h2>地区分布 <span class="muted">离线 IP 库解析</span></h2>
-          <ChartBox :option="provinceOption" :height="320" series-type="map" />
+          <h2>
+            地区分布 <span class="muted">离线 IP 库解析</span>
+            <button
+              type="button"
+              style="margin-left: 8px; padding: 3px 10px; font-size: 12px; border: 1px solid var(--line); border-radius: 999px; background: #fff; cursor: pointer"
+              :style="regionLevel === 'province' ? 'background: var(--blue-600); color: #fff; border-color: var(--blue-600)' : ''"
+              @click="regionLevel = 'province'"
+            >
+              按省
+            </button>
+            <button
+              type="button"
+              style="margin-left: 4px; padding: 3px 10px; font-size: 12px; border: 1px solid var(--line); border-radius: 999px; background: #fff; cursor: pointer"
+              :style="regionLevel === 'city' ? 'background: var(--blue-600); color: #fff; border-color: var(--blue-600)' : ''"
+              @click="regionLevel = 'city'"
+            >
+              按市
+            </button>
+          </h2>
+          <!-- key 必须带档位：ChartBox 里的 echarts 和地图注册是缓存的，
+               不换实例的话切到市级时不会去注册市级底图，图会空着 -->
+          <ChartBox
+            v-if="regionLevel === 'province'"
+            key="province-map"
+            :option="provinceOption"
+            :height="320"
+            series-type="map"
+          />
+          <ChartBox v-else key="city-map" :option="cityOption" :height="320" series-type="city-map" />
+          <!-- 地图按省 / 市分组，解析不出来的行不会出现。
+               不说明的话，图上的数加不出总量会被当成算错了 -->
+          <p v-if="unlocatedCount" class="muted" style="margin-top: 8px">
+            另有 {{ unlocatedCount }} 条只解析到国家（境外 IP 常见），未计入地图和排行榜
+          </p>
         </div>
         <div class="card">
-          <h2>省份 TOP10</h2>
-          <ChartBox :option="provinceRankOption" :height="320" />
+          <h2>{{ regionLevel === 'city' ? '城市' : '省份' }} TOP10</h2>
+          <ChartBox :option="regionRankOption" :height="320" />
         </div>
       </div>
 
@@ -543,7 +690,16 @@ const downloadRows = computed(() => resumeStats.value?.recent || [])
       </div>
 
       <div class="card">
-        <h2>访问明细 <span class="muted">最新 50 条</span></h2>
+        <h2>
+          访问明细 <span class="muted">最新 50 条</span>
+          <RouterLink
+            class="muted"
+            :to="{ name: 'admin-logs', query: { type: 'visit' } }"
+            style="margin-left: 8px; font-weight: 400"
+          >
+            按日期查全部 →
+          </RouterLink>
+        </h2>
         <table class="admin-table">
           <thead>
             <tr>
@@ -721,7 +877,16 @@ const downloadRows = computed(() => resumeStats.value?.recent || [])
       </div>
 
       <div class="card">
-        <h2>下载明细 <span class="muted">最新 50 条</span></h2>
+        <h2>
+          下载明细 <span class="muted">最新 50 条</span>
+          <RouterLink
+            class="muted"
+            :to="{ name: 'admin-logs', query: { type: 'download' } }"
+            style="margin-left: 8px; font-weight: 400"
+          >
+            按日期查全部 →
+          </RouterLink>
+        </h2>
         <table class="admin-table">
           <thead>
             <tr>
@@ -748,17 +913,76 @@ const downloadRows = computed(() => resumeStats.value?.recent || [])
       </div>
 
       <div class="card">
-        <h2>下载来源省份</h2>
+        <h2>
+          下载来源 IP <span class="muted">谁下的、在哪儿、下了几次</span>
+        </h2>
         <table class="admin-table">
           <thead>
-            <tr><th>省份</th><th style="width: 120px">下载次数</th></tr>
+            <tr>
+              <th style="width: 140px">IP</th>
+              <th style="width: 160px">归属地</th>
+              <th style="width: 100px">下载次数</th>
+              <th style="width: 100px">独立访客</th>
+              <th style="width: 110px">下载过几份</th>
+              <th style="width: 160px">最近一次</th>
+            </tr>
           </thead>
           <tbody>
-            <tr v-for="row in resumeStats.province" :key="row.name">
-              <td>{{ row.name }}</td>
+            <tr v-for="row in resumeStats.byIp" :key="row.ip">
+              <td class="muted">{{ row.ip }}</td>
+              <td class="muted">{{ row.region || '—' }}</td>
               <td class="num">{{ row.count }}</td>
+              <!-- 同一个出口 IP 下换台机器就是两个人，单独列出来才分得清
+                   「一个人下了 5 次」和「五个人各下了 1 次」 -->
+              <td class="num">{{ row.uv }}</td>
+              <td class="num">{{ row.resumes }}</td>
+              <td class="muted nowrap">{{ (row.lastAt || '').slice(5, 16) }}</td>
             </tr>
-            <tr v-if="!resumeStats.province.length"><td colspan="2" class="muted">还没有数据</td></tr>
+            <tr v-if="!resumeStats.byIp?.length"><td colspan="6" class="muted">还没有下载记录</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>
+          下载来源地区
+          <span class="muted">跟着访问那张图一样分省 / 市两档</span>
+          <button
+            type="button"
+            class="tabs-none"
+            style="margin-left: 8px; padding: 3px 10px; font-size: 12px; border: 1px solid var(--line); border-radius: 999px; background: #fff; cursor: pointer"
+            :style="downloadRegionLevel === 'province' ? 'background: var(--blue-600); color: #fff; border-color: var(--blue-600)' : ''"
+            @click="downloadRegionLevel = 'province'"
+          >
+            按省
+          </button>
+          <button
+            type="button"
+            class="tabs-none"
+            style="margin-left: 4px; padding: 3px 10px; font-size: 12px; border: 1px solid var(--line); border-radius: 999px; background: #fff; cursor: pointer"
+            :style="downloadRegionLevel === 'city' ? 'background: var(--blue-600); color: #fff; border-color: var(--blue-600)' : ''"
+            @click="downloadRegionLevel = 'city'"
+          >
+            按市
+          </button>
+        </h2>
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th style="width: 160px">{{ downloadRegionLevel === 'city' ? '省份' : '地区' }}</th>
+              <th v-if="downloadRegionLevel === 'city'" style="width: 160px">城市</th>
+              <th style="width: 120px">下载次数</th>
+              <th style="width: 120px">下载人数</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in downloadRegions" :key="(row.province || '') + (row.city || '') + row.levelKey">
+              <td>{{ row.province || '—' }}</td>
+              <td v-if="downloadRegionLevel === 'city'">{{ row.city || '—' }}</td>
+              <td class="num">{{ row.count }}</td>
+              <td class="num">{{ row.uv }}</td>
+            </tr>
+            <tr v-if="!downloadRegions.length"><td :colspan="downloadRegionLevel === 'city' ? 4 : 3" class="muted">还没有数据</td></tr>
           </tbody>
         </table>
       </div>

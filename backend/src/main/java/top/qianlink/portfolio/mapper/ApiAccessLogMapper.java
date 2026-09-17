@@ -4,7 +4,9 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import top.qianlink.portfolio.domain.ApiAccessLog;
+import top.qianlink.portfolio.domain.LogQuery;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -133,4 +135,38 @@ public interface ApiAccessLogMapper extends BaseMapper<ApiAccessLog> {
             WHERE created_at >= #{from}
             """)
     Map<String, Object> summary(@Param("from") LocalDateTime from);
+
+    /* ================= 日志页 ================= */
+
+    /**
+     * 日志页的过滤条件，和 {@link VisitLogMapper#LOG_WHERE} 一个套路：
+     * 分页和计数共用一份，免得两边的条件飘了。
+     *
+     * <p>默认排掉后台自己的请求（{@code internal = 0}），要看就传 includeInternal。
+     * 这张表<b>没有地区字段</b>（只存了 IP），所以地区筛选在这里是空操作——
+     * 归属地在服务层用内存查表补上，只用于显示。
+     */
+    String LOG_WHERE = """
+            WHERE visit_date BETWEEN #{from} AND #{to}
+            <if test="q != null"> AND (ip LIKE CONCAT('%', #{q}, '%') OR visitor_id LIKE CONCAT('%', #{q}, '%') OR path LIKE CONCAT('%', #{q}, '%'))</if>
+            <if test="path != null"> AND path = #{path}</if>
+            <if test="onlyFail"> AND biz_code &lt;&gt; 0</if>
+            <if test="!includeInternal"> AND internal = 0</if>
+            """;
+
+    @Select("<script>SELECT * FROM api_access_log " + LOG_WHERE
+            + " ORDER BY id DESC LIMIT #{size} OFFSET #{offset}</script>")
+    List<ApiAccessLog> pageLogs(LogQuery query);
+
+    @Select("<script>SELECT COUNT(*) FROM api_access_log " + LOG_WHERE + "</script>")
+    long countLogs(LogQuery query);
+
+    /** 接口路径下拉的候选值 */
+    @Select("""
+            SELECT DISTINCT path FROM api_access_log
+            WHERE visit_date BETWEEN #{from} AND #{to} AND path IS NOT NULL
+            ORDER BY path
+            LIMIT 200
+            """)
+    List<String> distinctPaths(@Param("from") LocalDate from, @Param("to") LocalDate to);
 }

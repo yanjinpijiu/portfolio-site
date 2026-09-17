@@ -41,6 +41,7 @@ async function logout() {
 
       <p class="admin-side__group">运行</p>
       <RouterLink :to="{ name: 'admin-dashboard' }">数据看板</RouterLink>
+      <RouterLink :to="{ name: 'admin-logs' }">访问日志</RouterLink>
       <RouterLink :to="{ name: 'admin-resumes' }">简历管理</RouterLink>
       <RouterLink :to="{ name: 'admin-backup' }">导出备份</RouterLink>
 

@@ -1,16 +1,24 @@
 package top.qianlink.portfolio.controller;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import top.qianlink.portfolio.common.ApiResponse;
+import top.qianlink.portfolio.common.Csv;
+import top.qianlink.portfolio.domain.LogQuery;
 import top.qianlink.portfolio.guard.CaptchaService;
 import top.qianlink.portfolio.guard.DownloadGate;
 import top.qianlink.portfolio.service.StatsQueryService;
 
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -67,5 +75,56 @@ public class AdminStatsController {
             @RequestParam(defaultValue = "30") int days,
             @RequestParam(required = false) Long resumeId) {
         return ApiResponse.ok(statsQueryService.resumes(days, resumeId));
+    }
+
+    /**
+     * 日志检索：按日期和一堆条件翻明细，分页返回。
+     *
+     * <p>参数直接绑到 {@link LogQuery} 上，字段名就是前端传的参数名。
+     * 日志页要能按 IP、访客 ID、路径、省市、终端各种组合去搜，
+     * 摊成十几个 {@code @RequestParam} 只会让签名读不下去。
+     */
+    @GetMapping("/logs")
+    public ApiResponse<Map<String, Object>> logs(LogQuery query) {
+        return ApiResponse.ok(statsQueryService.logs(query));
+    }
+
+    /** 日志筛选下拉的候选值，跟着类型和日期走 */
+    @GetMapping("/logs/options")
+    public ApiResponse<Map<String, Object>> logOptions(LogQuery query) {
+        return ApiResponse.ok(statsQueryService.logOptions(query));
+    }
+
+    /**
+     * 导出当前筛选结果。
+     *
+     * <p>不返回 {@code ApiResponse}——那是个 JSON 包装，导出的应该是能直接被 Excel 打开的
+     * 文件流。前端也不走 {@code request()}（它只认 JSON），和「导出备份」一样自己取 blob。
+     */
+    @GetMapping("/logs/export")
+    public ResponseEntity<byte[]> exportLogs(LogQuery query) {
+        List<List<String>> rows = statsQueryService.logRowsForExport(query);
+        // 截断判断要在取完行之后做：prepare 是在 logRowsForExport 里跑的，
+        // 这一步之后 query 里的起止日期才补全
+        boolean truncated = statsQueryService.logExportTruncated(query);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(Csv.BOM);
+        sb.append(Csv.row(statsQueryService.logExportHeader(query)));
+        for (List<String> row : rows) {
+            sb.append(Csv.row(row));
+        }
+        if (truncated) {
+            sb.append(Csv.row(List.of("# 结果超过 " + rows.size() + " 行，已截断")));
+        }
+
+        // 文件名用 ASCII：中文名虽然能靠 RFC 5987 编出去，但不同浏览器、不同解压工具
+        // 对它的处理不一致，一个日志文件不值得为这个赌
+        String fileName = "logs-" + query.getType() + "-" + query.getFrom() + "_" + query.getTo() + ".csv";
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDisposition.attachment().filename(fileName, StandardCharsets.UTF_8).build().toString())
+                .contentType(new MediaType("text", "csv", StandardCharsets.UTF_8))
+                .body(sb.toString().getBytes(StandardCharsets.UTF_8));
     }
 }

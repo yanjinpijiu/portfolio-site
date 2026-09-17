@@ -2,6 +2,8 @@ package top.qianlink.portfolio.service;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import top.qianlink.portfolio.domain.ApiAccessLog;
+import top.qianlink.portfolio.domain.LogQuery;
 import top.qianlink.portfolio.domain.ResumeDownloadLog;
 import top.qianlink.portfolio.domain.VisitLog;
 import top.qianlink.portfolio.mapper.ApiAccessLogMapper;
@@ -16,9 +18,11 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 数据看板的聚合查询。
@@ -43,6 +47,13 @@ public class StatsQueryService {
 
     /** 天数上限，防止 days=999999 把整库扫一遍 */
     private static final int MAX_DAYS = 365;
+
+    /** 日志页每页条数：默认值和上限。日志是给自己翻的，给太大只会拖着库陪跑 */
+    private static final int DEFAULT_LOG_SIZE = 50;
+    private static final int MAX_LOG_SIZE = 200;
+
+    /** 导出行数上限。超过就截断，文件名上会标出来 */
+    private static final int MAX_EXPORT_ROWS = 50000;
 
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
@@ -93,6 +104,9 @@ public class StatsQueryService {
                 cols("pv", "pv", "uv", "uv")));
         result.put("province", simplify(visitLogMapper.byProvince(fromTime), "name", "pv", "uv"));
         result.put("city", simplify(visitLogMapper.byCity(fromTime), "province", "city", "pv", "uv"));
+        // 地图和省份榜都按 province 分组，解析不出省的行直接消失。
+        // 不把这个数露出来，看的人会以为「图上的数加不出总数」是 bug
+        result.put("unlocated", visitLogMapper.countUnlocated(fromTime));
         result.put("browser", simplify(visitLogMapper.byBrowser(fromTime), "name", "pv", "uv"));
         result.put("os", simplify(visitLogMapper.byOs(fromTime), "name", "pv", "uv"));
         result.put("device", simplify(visitLogMapper.byDevice(fromTime), "name", "pv", "uv"));
@@ -313,15 +327,40 @@ public class StatsQueryService {
                     cols("cnt", "count", "uv", "uv")));
         }
 
-        List<Map<String, Object>> province = new ArrayList<>();
-        for (Map<String, Object> row : downloadLogMapper.byProvince(fromTime)) {
+        // 下载来源按省市两级一次查出来，前端切省 / 市两档用同一份数据。
+        // 原来只有省级，想看「具体是哪个市的」就得再加一条 SQL
+        List<Map<String, Object>> region = new ArrayList<>();
+        for (Map<String, Object> row : downloadLogMapper.byCity(fromTime)) {
             Map<String, Object> r = lower(row);
             Map<String, Object> item = new LinkedHashMap<>();
-            item.put("name", str(r.get("name")));
+            item.put("province", str(r.get("province")));
+            item.put("city", str(r.get("city")));
             item.put("count", num(r, "cnt"));
-            province.add(item);
+            item.put("uv", num(r, "uv"));
+            region.add(item);
         }
-        result.put("province", province);
+        result.put("region", region);
+
+        // 是哪个 IP 下的、在哪儿、下了几次。归属地规则和访问日志那套完全一致。
+        // 只留前 20：这一块的用途是「看看有哪些人在关注我」，不是做全量审计
+        List<Map<String, Object>> byIp = new ArrayList<>();
+        for (Map<String, Object> row : downloadLogMapper.byIp(fromTime)) {
+            Map<String, Object> r = lower(row);
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("ip", str(r.get("ip")));
+            item.put("region", joinRegion(new IpRegionService.Region(
+                    str(r.get("country")), str(r.get("province")), str(r.get("city")))));
+            item.put("count", num(r, "cnt"));
+            // 同一个出口 IP 下换台机器就是另一个人：区分「一个人下 5 次」和「五个人各下 1 次」
+            item.put("uv", num(r, "uv"));
+            item.put("resumes", num(r, "resumes"));
+            item.put("lastAt", timeStr(r.get("last_at")));
+            byIp.add(item);
+            if (byIp.size() >= 20) {
+                break;
+            }
+        }
+        result.put("byIp", byIp);
 
         List<Map<String, Object>> recent = new ArrayList<>();
         for (ResumeDownloadLog log : downloadLogMapper.recent(50)) {
@@ -336,6 +375,289 @@ public class StatsQueryService {
         }
         result.put("recent", recent);
         return result;
+    }
+
+    /* ================= 日志检索 ================= */
+
+    /**
+     * 按条件查一页日志。访问日志和接口日志共用，靠 {@code type} 分流。
+     *
+     * <p>和上面那些聚合查询的区别：这里<b>不能</b>把整个时间窗的结果捞回内存再切页，
+     * 必须让数据库做 {@code LIMIT/OFFSET}。聚合是「每天一行」，日志是「每次访问一行」，
+     * 量级差几百倍，拉回内存迟早会出事。
+     */
+    public Map<String, Object> logs(LogQuery query) {
+        prepare(query);
+
+        String type = query.getType();
+        long total = switch (type) {
+            case "api" -> apiAccessLogMapper.countLogs(query);
+            case "download" -> downloadLogMapper.countLogs(query);
+            default -> visitLogMapper.countLogs(query);
+        };
+        int pages = (int) ((total + query.getSize() - 1) / query.getSize());
+        // 停在最后一页之外（比如刚删过几行）就退到最后一页，而不是给一张空表
+        if (pages > 0 && query.getPage() > pages) {
+            query.setPage(pages);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("type", type);
+        result.put("from", query.getFrom().toString());
+        result.put("to", query.getTo().toString());
+        result.put("page", query.getPage());
+        result.put("size", query.getSize());
+        result.put("total", total);
+        result.put("pages", pages);
+        result.put("rows", switch (type) {
+            case "api" -> apiRows(query);
+            case "download" -> downloadRows(query);
+            default -> visitRows(query);
+        });
+        if ("visit".equals(type)) {
+            // 「这个人明明来过，地图上却没有」是这一块最常见的困惑，直接给出解释
+            result.put("unlocated", visitLogMapper.countLogsUnlocated(query));
+        }
+        return result;
+    }
+
+    /**
+     * 筛选下拉的候选值。跟着类型和日期走，列的是范围内真实出现过的值，
+     * 不是写死的清单，也不是全表 DISTINCT。
+     */
+    public Map<String, Object> logOptions(LogQuery query) {
+        prepare(query);
+        String type = query.getType();
+        LocalDate from = query.getFrom();
+        LocalDate to = query.getTo();
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("type", type);
+        result.put("from", from.toString());
+        result.put("to", to.toString());
+
+        if ("api".equals(type)) {
+            // api_access_log 只存了 IP，没有地区、终端这些列，对应下拉一律给空
+            result.put("paths", apiAccessLogMapper.distinctPaths(from, to));
+            result.put("pageTypes", List.of());
+            result.put("regions", List.of());
+            result.put("devices", List.of());
+            result.put("browsers", List.of());
+            result.put("oses", List.of());
+            return result;
+        }
+
+        if ("download".equals(type)) {
+            // 下载日志有地区，但没有路径和终端
+            result.put("paths", List.of());
+            result.put("pageTypes", List.of());
+            result.put("regions", regionsOf(downloadLogMapper.distinctRegions(from, to)));
+            result.put("devices", List.of());
+            result.put("browsers", List.of());
+            result.put("oses", List.of());
+            return result;
+        }
+
+        result.put("paths", visitLogMapper.distinctPaths(from, to));
+        result.put("pageTypes", visitLogMapper.distinctPageTypes(from, to));
+        result.put("regions", regionsOf(visitLogMapper.distinctRegions(from, to)));
+
+        // 浏览器 / 系统 / 设备一次查回来，在这里拆成三个去重列表
+        Set<String> browsers = new LinkedHashSet<>();
+        Set<String> oses = new LinkedHashSet<>();
+        Set<String> devices = new LinkedHashSet<>();
+        for (Map<String, Object> row : visitLogMapper.distinctTerminals(from, to)) {
+            Map<String, Object> r = lower(row);
+            addIfPresent(browsers, str(r.get("browser")));
+            addIfPresent(oses, str(r.get("os")));
+            addIfPresent(devices, str(r.get("device")));
+        }
+        result.put("browsers", new ArrayList<>(browsers));
+        result.put("oses", new ArrayList<>(oses));
+        result.put("devices", new ArrayList<>(devices));
+        return result;
+    }
+
+    /** 把 DISTINCT 出来的 country/province/city 三元组统一成前端要的形状 */
+    private static List<Map<String, Object>> regionsOf(List<Map<String, Object>> rows) {
+        List<Map<String, Object>> regions = new ArrayList<>();
+        for (Map<String, Object> row : rows) {
+            Map<String, Object> r = lower(row);
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("country", str(r.get("country")));
+            item.put("province", str(r.get("province")));
+            item.put("city", str(r.get("city")));
+            regions.add(item);
+        }
+        return regions;
+    }
+
+    /** 导出的表头（和 {@link #logRowsForExport} 的列一一对应） */
+    public List<String> logExportHeader(LogQuery query) {
+        return switch (query.getType()) {
+            case "api" -> List.of("时间", "路径", "方法", "业务码", "HTTP", "耗时(ms)", "IP",
+                    "归属地", "访客ID", "后台自己");
+            case "download" -> List.of("时间", "简历", "方向", "IP", "归属地", "访客ID", "放行方式");
+            default -> List.of("时间", "路径", "页面类型", "IP", "归属地", "访客ID",
+                    "浏览器", "系统", "设备", "来源");
+        };
+    }
+
+    /**
+     * 导出用的整份结果。上限 {@link #MAX_EXPORT_ROWS} 行，超了截断。
+     *
+     * <p>一次性查出来拼字符串，没有走游标：现在最大的一张表（api_access_log）
+     * 也就几百行，5 万行的上限下最坏占几十 MB 内存。真有一天导到上限了再改游标。
+     */
+    public List<List<String>> logRowsForExport(LogQuery query) {
+        prepare(query);
+        query.setPage(1);
+        query.setSize(MAX_EXPORT_ROWS);
+
+        List<List<String>> rows = new ArrayList<>();
+        switch (query.getType()) {
+            case "api" -> {
+                for (Map<String, Object> r : apiRows(query)) {
+                    rows.add(List.of(
+                            nz(r.get("at")), nz(r.get("path")), nz(r.get("method")),
+                            nz(r.get("bizCode")), nz(r.get("httpStatus")), nz(r.get("durationMs")),
+                            nz(r.get("ip")), nz(r.get("region")), nz(r.get("visitorId")),
+                            Boolean.TRUE.equals(r.get("internal")) ? "是" : "否"));
+                }
+            }
+            case "download" -> {
+                for (Map<String, Object> r : downloadRows(query)) {
+                    rows.add(List.of(
+                            nz(r.get("at")), nz(r.get("title")), nz(r.get("direction")),
+                            nz(r.get("ip")), nz(r.get("region")), nz(r.get("visitorId")),
+                            Boolean.TRUE.equals(r.get("freePass")) ? "免验证额度" : "过验证码"));
+                }
+            }
+            default -> {
+                for (Map<String, Object> r : visitRows(query)) {
+                    rows.add(List.of(
+                            nz(r.get("at")), nz(r.get("path")), nz(r.get("pageType")),
+                            nz(r.get("ip")), nz(r.get("region")), nz(r.get("visitorId")),
+                            nz(r.get("browser")), nz(r.get("os")), nz(r.get("device")),
+                            nz(r.get("referer"))));
+                }
+            }
+        }
+        return rows;
+    }
+
+    /** 导出会截断吗。前端在文件名上标一下，免得拿到一份不完整的表还以为导全了 */
+    public boolean logExportTruncated(LogQuery query) {
+        long total = switch (query.getType()) {
+            case "api" -> apiAccessLogMapper.countLogs(query);
+            case "download" -> downloadLogMapper.countLogs(query);
+            default -> visitLogMapper.countLogs(query);
+        };
+        return total > MAX_EXPORT_ROWS;
+    }
+
+    private static boolean isApi(LogQuery query) {
+        return "api".equals(query.getType());
+    }
+
+    /**
+     * 把查询条件补全并夹到合法范围。三个入口（分页、候选项、导出）都要先过这里，
+     * 否则 {@code size=99999999} 能算出个负的 offset，SQL 直接报错。
+     */
+    private static void prepare(LogQuery query) {
+        query.normalize();
+
+        if (query.getSize() <= 0) {
+            query.setSize(DEFAULT_LOG_SIZE);
+        } else {
+            query.setSize(Math.min(query.getSize(), MAX_LOG_SIZE));
+        }
+        query.setPage(Math.max(1, query.getPage()));
+
+        LocalDate today = LocalDate.now();
+        if (query.getTo() == null) {
+            query.setTo(today);
+        }
+        if (query.getFrom() == null) {
+            query.setFrom(query.getTo());
+        }
+        // 起止写反了就当没写反。翻日志时的手滑不值得弹一个错误出来
+        if (query.getFrom().isAfter(query.getTo())) {
+            LocalDate swap = query.getFrom();
+            query.setFrom(query.getTo());
+            query.setTo(swap);
+        }
+    }
+
+    private List<Map<String, Object>> visitRows(LogQuery query) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (VisitLog log : visitLogMapper.pageLogs(query)) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", log.getId());
+            item.put("at", timeStr(log.getCreatedAt()));
+            item.put("path", log.getPath());
+            item.put("pageType", log.getPageType());
+            item.put("ip", log.getIp());
+            item.put("region", joinRegion(new IpRegionService.Region(
+                    log.getCountry(), log.getProvince(), log.getCity())));
+            item.put("visitorId", log.getVisitorId());
+            item.put("browser", log.getBrowser());
+            item.put("os", log.getOs());
+            item.put("device", log.getDevice());
+            item.put("referer", log.getReferer());
+            out.add(item);
+        }
+        return out;
+    }
+
+    private List<Map<String, Object>> apiRows(LogQuery query) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (ApiAccessLog log : apiAccessLogMapper.pageLogs(query)) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", log.getId());
+            item.put("at", timeStr(log.getCreatedAt()));
+            item.put("path", log.getPath());
+            item.put("method", log.getMethod());
+            item.put("bizCode", log.getBizCode());
+            item.put("httpStatus", log.getHttpStatus());
+            item.put("durationMs", log.getDurationMs());
+            item.put("ip", log.getIp());
+            // 这张表没存地区，现查一次内存表补上（纯内存二分，没有 IO）
+            item.put("region", joinRegion(ipRegionService.lookup(log.getIp())));
+            item.put("visitorId", log.getVisitorId());
+            item.put("internal", Boolean.TRUE.equals(log.getInternal()));
+            out.add(item);
+        }
+        return out;
+    }
+
+    private List<Map<String, Object>> downloadRows(LogQuery query) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (ResumeDownloadLog log : downloadLogMapper.pageLogs(query)) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", log.getId());
+            item.put("at", timeStr(log.getCreatedAt()));
+            item.put("resumeId", log.getResumeId());
+            item.put("title", log.getResumeTitle());
+            item.put("direction", log.getDirection());
+            item.put("ip", log.getIp());
+            item.put("region", joinRegion(new IpRegionService.Region(
+                    log.getCountry(), log.getProvince(), log.getCity())));
+            item.put("visitorId", log.getVisitorId());
+            item.put("freePass", Boolean.TRUE.equals(log.getFreePass()));
+            out.add(item);
+        }
+        return out;
+    }
+
+    private static void addIfPresent(Set<String> set, String value) {
+        if (value != null) {
+            set.add(value);
+        }
+    }
+
+    private static String nz(Object value) {
+        return value == null ? "" : value.toString();
     }
 
     /* ================= 工具 ================= */
@@ -446,16 +768,43 @@ public class StatsQueryService {
         return v.toString();
     }
 
+    /**
+     * 归属地展示。逐级退化：省市 → 省 → 国家 → null。
+     *
+     * <p>国家的取舍是有讲究的：境内 IP 不重复标「中国」（省市已经说明问题了），
+     * 境外 IP 一定要带国名——只写「加利福尼亚 圣克拉拉」看不出是哪个国家。
+     *
+     * <p>之前这里只拼省市、把 country 整个丢掉，于是只有国家级解析结果的 IP
+     * （ip2region 的免费数据对境外基本只到国家）在表里全显示成「—」，
+     * 看起来像是没查到，其实库里有。
+     */
     private static String joinRegion(IpRegionService.Region region) {
-        return region == null ? null : joinRegionRaw(region.province(), region.city());
+        if (region == null) {
+            return null;
+        }
+        String country = region.country();
+        String body = joinRegionRaw(region.province(), region.city());
+        if (body == null) {
+            return country;
+        }
+        if (country == null || "中国".equals(country)) {
+            return body;
+        }
+        return country + " " + body;
     }
 
     private static String joinRegionRaw(String province, String city) {
         if (province == null) {
             return city;
         }
-        if (city == null || city.equals(province)) {
+        if (city == null) {
             return province;
+        }
+        // 直辖市的省市两级在 IP 库里是「北京」和「北京市」，港澳是「香港特别行政区」和「香港」，
+        // 照原样拼出来就是「北京 北京市」这种看着像 bug 的重复。
+        // 两级互相包含时只留长的那个，其余照常拼
+        if (city.startsWith(province) || province.startsWith(city)) {
+            return city.length() >= province.length() ? city : province;
         }
         return province + " " + city;
     }

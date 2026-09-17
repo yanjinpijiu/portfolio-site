@@ -14,6 +14,7 @@ import NotFoundView from '../views/NotFoundView.vue'
 const AdminLoginView = () => import('../views/admin/AdminLoginView.vue')
 const AdminLayout = () => import('../views/admin/AdminLayout.vue')
 const AdminStatsView = () => import('../views/admin/AdminStatsView.vue')
+const AdminLogsView = () => import('../views/admin/AdminLogsView.vue')
 const AdminResumeView = () => import('../views/admin/AdminResumeView.vue')
 const AdminProjectsView = () => import('../views/admin/AdminProjectsView.vue')
 const AdminSkillsView = () => import('../views/admin/AdminSkillsView.vue')
@@ -44,6 +45,7 @@ const routes = [
     meta: { requiresAuth: true },
     children: [
       { path: 'dashboard', name: 'admin-dashboard', component: AdminStatsView, meta: { title: '数据看板' } },
+      { path: 'logs', name: 'admin-logs', component: AdminLogsView, meta: { title: '访问日志' } },
       { path: 'resumes', name: 'admin-resumes', component: AdminResumeView, meta: { title: '简历管理' } },
       { path: 'projects', name: 'admin-projects', component: AdminProjectsView, meta: { title: '项目与图片' } },
       { path: 'skills', name: 'admin-skills', component: AdminSkillsView, meta: { title: '技能分组' } },
@@ -110,7 +112,14 @@ router.afterEach((to) => {
 
 installVisibilityTracking(() => {
   const current = router.currentRoute.value
-  return current ? { path: current.path, name: current.name } : null
+  // 首次导航还没完成时，currentRoute 是 vue-router 的 START_LOCATION：
+  // path 是 '/'、没有 matched、name 是 undefined。拿它上报会凭空记一条「访问了首页」，
+  // 而且路径是 '/'，连「后台不埋点」那条过滤都绕过去了
+  // （症状：翻后台的时候，访问明细里会多出一条 route_name 为空的首页记录）
+  if (!current || !current.matched.length) {
+    return null
+  }
+  return { path: current.path, name: current.name }
 })
 
 export default router

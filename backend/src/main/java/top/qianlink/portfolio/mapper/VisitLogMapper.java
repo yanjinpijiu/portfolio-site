@@ -3,8 +3,10 @@ package top.qianlink.portfolio.mapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import top.qianlink.portfolio.domain.LogQuery;
 import top.qianlink.portfolio.domain.VisitLog;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -194,4 +196,90 @@ public interface VisitLogMapper extends BaseMapper<VisitLog> {
             LIMIT #{limit}
             """)
     List<VisitLog> recent(@Param("limit") int limit);
+
+    /**
+     * 范围里没能解析出省份的行数。
+     *
+     * <p>地区地图和省份排行榜都是按 province 分组的，这些行不会出现在图上。
+     * 不把这个数说出来，看的人会以为「图上的数加不出总量」是算错了。
+     */
+    @Select("""
+            SELECT COUNT(*) FROM visit_log
+            WHERE created_at >= #{from} AND province IS NULL
+            """)
+    long countUnlocated(@Param("from") LocalDateTime from);
+
+    /* ================= 日志页 ================= */
+
+    /**
+     * 日志页的过滤条件。
+     *
+     * <p>分页查询和计数查询<b>必须</b>共用这一份：各写一遍的话，迟早会出现
+     * 「总数说有 120 条、翻到第 3 页却是空的」这种对不上的问题。
+     *
+     * <p>关键词用 {@code CONCAT('%', #{q}, '%')} 而不是在 Java 侧拼 %：
+     * 拼进去的值仍然是 {@code #{}} 绑参，不是字符串拼接，注入不进来。
+     */
+    String LOG_WHERE = """
+            WHERE visit_date BETWEEN #{from} AND #{to}
+            <if test="q != null"> AND (ip LIKE CONCAT('%', #{q}, '%') OR visitor_id LIKE CONCAT('%', #{q}, '%') OR path LIKE CONCAT('%', #{q}, '%'))</if>
+            <if test="path != null"> AND path = #{path}</if>
+            <if test="pageType != null"> AND page_type = #{pageType}</if>
+            <if test="country != null"> AND country = #{country}</if>
+            <if test="province != null"> AND province = #{province}</if>
+            <if test="city != null"> AND city = #{city}</if>
+            <if test="device != null"> AND device = #{device}</if>
+            <if test="browser != null"> AND browser = #{browser}</if>
+            <if test="os != null"> AND os = #{os}</if>
+            """;
+
+    /** 一页日志。按 id 倒序，和「最新 N 条」的口径一致，同秒写入时顺序也稳定 */
+    @Select("<script>SELECT * FROM visit_log " + LOG_WHERE
+            + " ORDER BY id DESC LIMIT #{size} OFFSET #{offset}</script>")
+    List<VisitLog> pageLogs(LogQuery query);
+
+    /** 符合条件的总行数 */
+    @Select("<script>SELECT COUNT(*) FROM visit_log " + LOG_WHERE + "</script>")
+    long countLogs(LogQuery query);
+
+    /** 符合条件的行里，解析不出省份的有多少（日志页底部用来解释「为什么搜不到某个人」） */
+    @Select("<script>SELECT COUNT(*) FROM visit_log " + LOG_WHERE + " AND province IS NULL</script>")
+    long countLogsUnlocated(LogQuery query);
+
+    /** 路径下拉的候选值：只列范围内真出现过的，不查全表 */
+    @Select("""
+            SELECT DISTINCT path FROM visit_log
+            WHERE visit_date BETWEEN #{from} AND #{to} AND path IS NOT NULL
+            ORDER BY path
+            LIMIT 200
+            """)
+    List<String> distinctPaths(@Param("from") LocalDate from, @Param("to") LocalDate to);
+
+    /** 页面类型下拉的候选值 */
+    @Select("""
+            SELECT DISTINCT page_type FROM visit_log
+            WHERE visit_date BETWEEN #{from} AND #{to} AND page_type IS NOT NULL
+            ORDER BY page_type
+            LIMIT 200
+            """)
+    List<String> distinctPageTypes(@Param("from") LocalDate from, @Param("to") LocalDate to);
+
+    /** 地区三级联动的候选值。省市在前端按这份数据推导，不用再发一次请求 */
+    @Select("""
+            SELECT DISTINCT country, province, city FROM visit_log
+            WHERE visit_date BETWEEN #{from} AND #{to}
+              AND (country IS NOT NULL OR province IS NOT NULL OR city IS NOT NULL)
+            ORDER BY country, province, city
+            LIMIT 200
+            """)
+    List<Map<String, Object>> distinctRegions(@Param("from") LocalDate from, @Param("to") LocalDate to);
+
+    /** 浏览器 / 系统 / 设备下拉的候选值，一次查出来再在服务层拆成三个列表 */
+    @Select("""
+            SELECT DISTINCT browser, os, device FROM visit_log
+            WHERE visit_date BETWEEN #{from} AND #{to}
+            ORDER BY browser, os, device
+            LIMIT 200
+            """)
+    List<Map<String, Object>> distinctTerminals(@Param("from") LocalDate from, @Param("to") LocalDate to);
 }

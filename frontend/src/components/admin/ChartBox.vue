@@ -12,12 +12,13 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
  * 2. **实例跟着容器走**。数据一更新就 setOption（不重建实例），
  *    容器尺寸变化用 ResizeObserver 兜住——看板的栅格在窄屏会变成单列。
  *
- * 地图用的 GeoJSON（582KB）同样只在真正画地图时才去取。
+ * 地图用的 GeoJSON 同样只在真正画地图时才去取。省市两张图分开加载：
+ * 画省级底图不需要把 4 MB 的市级底图也拖下来，反过来也一样。
  */
 const props = defineProps({
   option: { type: Object, default: null },
   height: { type: Number, default: 260 },
-  /** 直接给 echarts 的第一个参数，用来指定注册过的地图等 */
+  /** 直接给 echarts 的第一个参数，用来指定注册过的地图等；city-map 为全国市级底图 */
   seriesType: { type: String, default: '' }
 })
 
@@ -47,10 +48,13 @@ async function ensureLib() {
     components.TitleComponent,
     renderers.CanvasRenderer
   ])
-  // 中国地图：前台永远用不到，所以放在这个懒加载块里
+  // 地图数据：前台永远用不到，所以放在这个懒加载块里
   if (props.seriesType === 'map') {
     const geo = await import('../../assets/china-geo.json')
     core.registerMap('china', geo.default || geo)
+  } else if (props.seriesType === 'city-map') {
+    const geo = await import('../../assets/china-cities-geo.json')
+    core.registerMap('china-cities', geo.default || geo)
   }
   echartsLib = core
   return echartsLib
