@@ -152,8 +152,12 @@ const provinceOption = computed(() => {
     series: [{
       type: 'map',
       map: 'china',
-      roam: false,
+      // 能拖能滚轮缩放。一屏看全国时字会挤在一起所以常态不显示省名，
+      // 鼠标停上去由 tooltip 和 emphasis 给出名字
+      roam: true,
+      scaleLimit: { min: 1, max: 12 },
       label: { show: false },
+      emphasis: { label: { show: true, fontSize: 10 } },
       data: rows.map((r) => ({ name: mapName(r.name), value: r.pv }))
     }]
   }
@@ -238,7 +242,9 @@ const cityOption = computed(() => {
     series: [{
       type: 'map',
       map: 'china-cities',
-      roam: false,
+      // 市级图必须能放大：372 个市挤在一屏里，不放大根本看不清哪个是哪个
+      roam: true,
+      scaleLimit: { min: 1, max: 30 },
       label: { show: false },
       // 底图有 372 个市，线画细一点，不然整个东部糊成一片
       itemStyle: { borderColor: '#C9DCEB', borderWidth: 0.4 },

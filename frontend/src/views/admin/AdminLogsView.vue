@@ -256,9 +256,16 @@ function reload() {
     <div class="admin-head">
       <div>
         <h1>访问日志</h1>
-        <p class="sub">按日期翻明细。条件会写进地址栏，刷新或在手机上打开都还是这一屏。</p>
+        <p class="sub">
+          按日期翻明细。条件会写进地址栏，刷新或在手机上打开都还是这一屏。
+        </p>
       </div>
       <div class="row">
+        <!-- 这一页只列明细，图表和汇总都在看板那边。不给个入口的话，
+             很容易以为「统计没了」 -->
+        <RouterLink class="btn btn--ghost btn--sm" :to="{ name: 'admin-dashboard' }">
+          看图表统计去数据看板 →
+        </RouterLink>
         <button class="btn btn--ghost btn--sm" type="button" @click="reload">刷新</button>
       </div>
     </div>
