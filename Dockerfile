@@ -6,10 +6,11 @@
 # ---------------------------------------------------------------- 1. 前端
 FROM node:20-alpine AS frontend
 WORKDIR /build/frontend
-# 显式压低 Node 堆：容器里 Node 会按 cgroup 内存上限自动给堆扩容，
-# 小内存机器上会直接堆溢出（SIGABRT）。768MB 够这个前端项目构建用，
-# 机器内存紧张时配合 docker build --memory 使用也不容易 OOM
-ENV NODE_OPTIONS=--max-old-space-size=768
+# 显式声明 Node 堆：容器里 Node 会按 cgroup 上限自动给堆扩容，小内存机器上
+# 会直接堆溢出（SIGABRT）。注意：本前端包含约 20MB 的省市地图 GeoJSON 资源，
+# Vite 构建峰值需要约 1.5GB 堆——构建机可用内存不足 2GB 时这一阶段会失败，
+# 届时改用本地构建前端 + deploy/ 裸机部署路径（见 README「已知边界」）
+ENV NODE_OPTIONS=--max-old-space-size=1536
 # 先只拷依赖清单：改业务代码时这一层还能命中缓存，不用重装依赖
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
