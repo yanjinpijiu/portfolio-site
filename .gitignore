@@ -1,0 +1,51 @@
+# 构建产物
+frontend/node_modules/
+frontend/dist/
+backend/target/
+
+# 运行时数据（H2 数据库文件 + 上传的简历 + 每日备份产物）
+backend/data/
+backend/backups/
+
+# 本地私密配置（后台密钥等），只保留 .example 模板
+# 放在 jar 外面，构建产物里不含密钥
+backend/application-local.yml
+backend/config/application-local.yml
+
+# 部署时在服务器上生成的环境变量文件和备份
+deploy/portfolio.env
+deploy/*.env
+!deploy/portfolio.env.example
+*.tar.gz
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# 系统
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 日志
+*.log
+npm-debug.log*
+
+# ---------------------------------------------------------------------------
+# 站点内容：只留本地，绝不进仓库
+#
+# 如果你写了自己的 Seeder 往里灌真实资料（姓名/手机号/邮箱/学校/项目描述），
+# 或者放了证件照、证书扫描件，就靠下面这几条把它们挡在仓库外面。
+# 公开仓库只放「引擎」，不放「内容」——详见 CONTRIBUTING.md。
+#
+# 注意：Seeder 是本地用的 ApplicationRunner，没有任何其它代码引用它们，
+# 不进仓库不影响编译；仓库里因此不带任何站点内容（首次启动站点为空，后台自己录）。
+# ---------------------------------------------------------------------------
+backend/src/main/resources/seed-images/
+backend/src/main/java/**/config/ContentSeeder.java
+backend/src/main/java/**/config/DataSeeder.java
+
+# 工具缓存
+.mimosa/
+backend/.mimosa/

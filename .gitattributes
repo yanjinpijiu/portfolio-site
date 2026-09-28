@@ -1,0 +1,14 @@
+# 一律用 LF 换行。
+# 不写这个的话 Windows 上 clone 出来的 shell 脚本会带 CRLF，
+# scp 到 Linux 一执行就报 `$'\r': command not found`，且报错位置很迷惑。
+* text=auto eol=lf
+
+# 二进制文件别做换行转换
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.webp binary
+*.ico  binary
+*.woff binary
+*.woff2 binary
+*.jar  binary
