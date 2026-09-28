@@ -26,6 +26,28 @@ public class AppProperties {
      */
     private String webRoot;
 
+    /**
+     * 前端构建产物目录。填了后端就自己发静态文件（Docker 单容器部署用），
+     * 留空则交给外面的 nginx（裸机部署用）。
+     */
+    private String staticDir;
+
+    /**
+     * 演示模式：开启后所有写操作由服务端拒绝（403），后台只能登录、只能看。
+     *
+     * <p>给「把站当 demo 挂出去给别人点」的场景用（在线演示站），生产自己用的时候保持 false。
+     * 安全边界必须在服务端：前端把按钮禁掉只是体验，绕过前端直接发请求也改不了东西。
+     */
+    private boolean demoMode = false;
+
+    /**
+     * 登录页上显示的演示密钥提示。留空就不显示。
+     *
+     * <p>演示站的密钥本来就是公开的（写在 README 里），直接显示在登录页省得别人猜；
+     * 自己正式用的站留空，别把真密钥写在页面上。
+     */
+    private String demoKeyHint;
+
     private Storage storage = new Storage();
 
     private Backup backup = new Backup();

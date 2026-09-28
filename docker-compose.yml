@@ -1,0 +1,42 @@
+# 一键部署：cp .env.example .env → 改 APP_ADMIN_KEY → docker compose up -d
+#
+# 起来之后访问 http://<服务器IP>:${APP_PORT}（默认 8080），进 /admin 用你设的密钥登录。
+# 想挂域名 + HTTPS：前面加一层 nginx 反代到本机这个端口，或看 deploy/DEPLOY.md。
+
+services:
+  app:
+    build: .
+    image: portfolio-site:latest
+    container_name: portfolio-site
+    restart: unless-stopped
+
+    # 密钥等配置只从 .env 读，不写在这个文件里（.env 已被 gitignore）
+    env_file:
+      - .env
+
+    environment:
+      SERVER_PORT: 8080
+      APP_STORAGE_TYPE: local
+      # 容器里没有 nginx，前端静态文件由后端自己发
+      APP_STATIC_DIR: /app/static
+      APP_WEB_ROOT: /app/static
+      TZ: ${TZ:-Asia/Shanghai}
+
+    ports:
+      # 只映射到本机时把左边改成 127.0.0.1:${APP_PORT:-8080}，
+      # 由外层的 nginx 反代进来（公网不直接暴露这个端口）
+      - "${APP_PORT:-8080}:8080"
+
+    volumes:
+      # H2 数据库 + 上传的图片与简历
+      - ./data:/app/data
+      # 每天 3:00 自动打包的备份
+      - ./backups:/app/backups
+
+    # 健康检查打的是公开接口（不需要登录）：容器里装了 curl，就为这一件事
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8080/api/projects"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 40s

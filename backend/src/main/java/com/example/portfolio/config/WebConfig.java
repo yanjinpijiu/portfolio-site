@@ -15,6 +15,7 @@ public class WebConfig implements WebMvcConfigurer {
     private final AdminAuthInterceptor adminAuthInterceptor;
     private final ApiAccessInterceptor apiAccessInterceptor;
     private final SnapshotRefreshInterceptor snapshotRefreshInterceptor;
+    private final DemoReadOnlyInterceptor demoReadOnlyInterceptor;
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
@@ -30,10 +31,17 @@ public class WebConfig implements WebMvcConfigurer {
                 .excludePathPatterns("/api/admin/login")
                 .order(1);
 
+        // 演示模式（只读）排在鉴权之后：没登录的写请求仍然回 401「请先登录」，
+        // 登录之后的写请求才回 403「演示站不能改」——两种拒绝语义不同，别混成一个
+        registry.addInterceptor(demoReadOnlyInterceptor)
+                .addPathPatterns("/api/admin/**")
+                .excludePathPatterns("/api/admin/login")
+                .order(2);
+
         // 静态模式下，后台改完内容自动重建快照（具体见那个类里的说明）
         registry.addInterceptor(snapshotRefreshInterceptor)
                 .addPathPatterns("/api/admin/**")
-                .order(2);
+                .order(3);
     }
 
     @Override

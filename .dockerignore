@@ -1,0 +1,25 @@
+# 构建上下文里不需要的东西（都在镜像里重新构建或运行时挂载）
+.git
+.gitignore
+.github
+.idea
+.vscode
+
+# 依赖与构建产物
+frontend/node_modules
+frontend/dist
+backend/target
+
+# 运行时数据与备份
+data
+backups
+backend/data
+backend/backups
+
+# 本地密钥与文档
+.env
+*.local.yml
+backend/application-local.yml
+docs
+deploy
+*.md

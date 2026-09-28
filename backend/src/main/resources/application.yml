@@ -52,9 +52,16 @@ app:
   # 部署时由 portfolio.env 里的 APP_WEB_ROOT 指到 /var/www/portfolio；本地留空，
   # 切不动文件时后台会明确提示「只在服务器上生效」，而不是装作切成功
   web-root: ${APP_WEB_ROOT:}
+  # 前端产物目录。填了后端自己发静态文件（Docker 单容器部署，没有 nginx）；
+  # 裸机 + nginx 的部署方式留空，静态文件由 nginx 发
+  static-dir: ${APP_STATIC_DIR:}
   # 后台登录密钥不在本文件里，见 application-local.yml（本地）或环境变量 APP_ADMIN_KEY（部署）。
   # 两者都没有时服务会启动失败，避免线上跑在未知密钥上。
   token-ttl-hours: 12
+  # 演示模式：true = 后台只读（所有写操作由服务端返回 403）。
+  # demo-key-hint 填了才会在登录页显示「演示密钥：xxx」，自己的正式站留空
+  demo-mode: ${APP_DEMO_MODE:false}
+  demo-key-hint: ${APP_DEMO_KEY_HINT:}
   # 允许跨域的前端来源（本地开发用；生产由 nginx 同源代理，可留空）
   cors-origins:
     - http://localhost:5173

@@ -2,8 +2,11 @@
 import { onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, setUnauthorizedHandler, tokenStore } from '../../api'
+import { loadMeta, metaState } from '../../store/meta'
 
 const router = useRouter()
+
+onMounted(loadMeta)
 
 /**
  * 令牌一旦失效就把人送回登录页。
@@ -51,7 +54,28 @@ async function logout() {
     </aside>
 
     <div class="admin-main">
+      <p v-if="metaState.demoMode" class="demo-banner">
+        <strong>演示模式：只读</strong>
+        所有页面都能看，写操作由服务端直接拒绝（403）。想部署一份能改的，见仓库 README 的一键部署。
+      </p>
       <RouterView />
     </div>
   </div>
 </template>
+
+<style scoped>
+.demo-banner {
+  margin: 0 0 18px;
+  padding: 10px 14px;
+  border: 1px solid #d8c08a;
+  border-radius: 6px;
+  background: #fdf8ec;
+  color: #7a5c15;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.demo-banner strong {
+  margin-right: 6px;
+}
+</style>

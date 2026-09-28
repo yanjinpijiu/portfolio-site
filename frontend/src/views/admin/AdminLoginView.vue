@@ -1,7 +1,8 @@
 <script setup>
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, tokenStore } from '../../api'
+import { loadMeta, metaState } from '../../store/meta'
 import AppIcon from '../../components/AppIcon.vue'
 
 const router = useRouter()
@@ -10,6 +11,8 @@ const route = useRoute()
 const key = ref('')
 const loading = ref(false)
 const error = ref('')
+
+onMounted(loadMeta)
 
 async function submit() {
   if (!key.value.trim()) {
@@ -38,6 +41,11 @@ async function submit() {
         <h1>后台登录</h1>
         <p class="hint">仅用于本人管理简历文件，非公开入口。</p>
 
+        <p v-if="metaState.demoKeyHint" class="demo-hint">
+          演示密钥：<code>{{ metaState.demoKeyHint }}</code>
+          <span>这是只读演示站：登录后所有页面都能看，写操作会被服务端拒绝。</span>
+        </p>
+
         <div v-if="error" class="alert alert--error">{{ error }}</div>
 
         <form @submit.prevent="submit">
@@ -62,3 +70,30 @@ async function submit() {
     </div>
   </div>
 </template>
+
+<style scoped>
+.demo-hint {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid #d8c08a;
+  border-radius: 6px;
+  background: #fdf8ec;
+  color: #7a5c15;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.demo-hint code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #fff;
+  border: 1px solid #e2d3ab;
+  font-weight: 600;
+}
+
+.demo-hint span {
+  display: block;
+  margin-top: 4px;
+  color: #8a7440;
+}
+</style>
